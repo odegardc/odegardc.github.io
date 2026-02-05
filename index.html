@@ -22,7 +22,7 @@
   <div class="row">
     <label>Column name: </label>
     <input id="col" type="text" placeholder="e.g., Absorbance" />
-    <button id="run">Run</button>
+    <button id="run" type="button">Run</button>
   </div>
 
   <div class="row" id="status"></div>
@@ -55,12 +55,27 @@
     const logEl = document.getElementById("log");
 
     async function init() {
-      statusEl.textContent = "Loading Python runtime (Pyodide)...";
-      pyodide = await loadPyodide();
-      await pyodide.loadPackage(["pandas", "matplotlib"]);
-      const pyCode = await fetch("control.py").then(r => r.text());
-      pyodide.runPython(pyCode);
-      statusEl.textContent = "Ready. Upload a CSV and enter a column name.";
+      try {
+        statusEl.textContent = "Loading Python runtime (Pyodide)...";
+        pyodide = await loadPyodide();
+        await pyodide.loadPackage(["pandas", "matplotlib"]);
+    
+        const resp = await fetch("control.py"); // make sure this file exists at this path
+        if (!resp.ok) throw new Error(`Failed to fetch control.py: ${resp.status} ${resp.statusText}`);
+        const pyCode = await resp.text();
+    
+        pyodide.runPython(pyCode);
+    
+        // sanity check: ensure the function exists
+        const hasFn = pyodide.runPython(`'controlSensitizingGraph' in globals()`);
+        if (!hasFn) throw new Error("controlSensitizingGraph was not defined after running control.py");
+    
+        statusEl.textContent = "Ready. Upload a CSV and enter a column name.";
+      } catch (err) {
+        statusEl.textContent = "Error during init.";
+        logEl.textContent = err?.stack || String(err);
+        console.error(err);
+      }
     }
 
     document.getElementById("file").addEventListener("change", async (e) => {
