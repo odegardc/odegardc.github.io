@@ -1,10 +1,14 @@
-import pandas as pd
-import matplotlib.pyplot as plt
-from io import BytesIO
+import io
 import base64
+import pandas as pd
+import matplotlib
+matplotlib.use("Agg")  # important for headless plotting
+import matplotlib.pyplot as plt
+
 
 def controlSensitizingGraph(controlDataBytes, outputCol):
-    df = pd.read_csv(BytesIO(controlDataBytes))
+    # Read CSV bytes
+    df = pd.read_csv(io.BytesIO(controlDataBytes))
 
     if outputCol not in df.columns:
         return {
@@ -78,11 +82,10 @@ def controlSensitizingGraph(controlDataBytes, outputCol):
                 messages.append(f"[Rule 6] 15 points within +/-1 between {i-14} and {i}")
                 problemPoints.update(range(i - 14, i + 1))
 
-        # Rule 7: Fourteen alternating up/down
+        # Rule 7: Fourteen alternating up/down (raw data)
         if i >= 13:
-            w = list(data.iloc[i - 13 : i + 1])  # raw values
-            diffs = [w[j + 1] - w[j] for j in range(13)]  # differences
-
+            w = list(data.iloc[i - 13 : i + 1])
+            diffs = [w[j + 1] - w[j] for j in range(13)]
             if all(d != 0 for d in diffs):
                 alternating = all(diffs[j] * diffs[j + 1] < 0 for j in range(12))
                 if alternating:
@@ -99,29 +102,29 @@ def controlSensitizingGraph(controlDataBytes, outputCol):
     # Plot
     x = list(range(len(zScores)))
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.scatter(x, zScores, marker='o')
+    ax.scatter(x, zScores, marker="o")
 
     prob = sorted(problemPoints)
     if prob:
-        ax.scatter(prob, [zScores[i] for i in prob], color='red', s=60, zorder=10)
+        ax.scatter(prob, [zScores[i] for i in prob], color="red", s=60, zorder=10)
 
     for level in range(-3, 4):
-        linestyle = '--' if level != 0 else '-'
+        linestyle = "--" if level != 0 else "-"
         alpha = 0.7 if level != 0 else 1
         ax.axhline(
             level,
-            color=('red' if abs(level) >= 2 else 'black'),
+            color=("red" if abs(level) >= 2 else "black"),
             linestyle=linestyle,
             linewidth=1,
-            alpha=alpha
+            alpha=alpha,
         )
 
     ax.set_title(f"Std Deviations from Mean for '{outputCol}'")
     ax.set_xlabel("Trial Number")
     ax.set_ylabel("Number of Standard Deviations")
-    ax.grid(True, linestyle=':', linewidth=0.5)
+    ax.grid(True, linestyle=":", linewidth=0.5)
 
-    buf = BytesIO()
+    buf = io.BytesIO()
     fig.tight_layout()
     fig.savefig(buf, format="png", dpi=150)
     plt.close(fig)
