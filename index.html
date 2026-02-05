@@ -125,7 +125,16 @@
 controlSensitizingGraph(bytes(file_bytes), output_col)
         `);
 
-        const result = pyOut?.toJs ? pyOut.toJs({ dict_converter: Object }) : pyOut;
+        let result;
+        if (pyOut?.toJs) {
+          // Convert Python dict -> JS object
+          const converted = pyOut.toJs({ dict_converter: Object.fromEntries, create_proxies: false });
+          // pyOut is a PyProxy; good hygiene to free it
+          pyOut.destroy?.();
+          result = converted;
+        } else {
+          result = pyOut;
+        }
 
         if (!result || typeof result !== "object") {
           throw new Error("Python returned unexpected output:\n" + String(result));
