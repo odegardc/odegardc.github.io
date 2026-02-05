@@ -12,6 +12,7 @@
     img { max-width: 100%; border: 1px solid #ddd; border-radius: 8px; }
   </style>
 </head>
+
 <body>
   <h1>Control Sensitizing Graph</h1>
 
@@ -20,116 +21,157 @@
   </div>
 
   <div class="row">
-    <label>Column name: </label>
+    <label for="col">Column name: </label>
     <input id="col" type="text" placeholder="e.g., Absorbance" />
     <button id="run" type="button">Run</button>
   </div>
 
   <div class="row" id="status"></div>
   <div class="row" id="summary"></div>
-  <div class="row"><img id="plot" /></div>
+  <div class="row"><img id="plot" alt="plot" /></div>
   <div class="row mono" id="log"></div>
 
-  <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"> </script>
+  <!-- Load Pyodide -->
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
+
   <script>
     console.log("SCRIPT LOADED");
+
+    // DOM refs (set on DOMContentLoaded)
+    let statusEl, summaryEl, plotEl, logEl, fileEl, colEl, runEl;
+
+    // State
     let pyodide = null;
     let fileBytes = null;
 
-    window.addEventListener("DOMContentLoaded", () => {
-      console.log("DOM READY");
-  
-      const runBtn = document.getElementById("run");
-      const fileInput = document.getElementById("file");
-  
-      console.log("runBtn:", runBtn);
-      console.log("fileInput:", fileInput);
-  
-      runBtn?.addEventListener("click", () => console.log("RUN CLICKED"));
-      fileInput?.addEventListener("change", () => console.log("FILE CHANGED"));
-    });
-    
-    const statusEl = document.getElementById("status");
-    const summaryEl = document.getElementById("summary");
-    const plotEl = document.getElementById("plot");
-    const logEl = document.getElementById("log");
+    function setStatus(msg) { statusEl.textContent = msg; }
+    function setLog(msg) { logEl.textContent = msg; }
 
-    async function init() {
+    async function initPyodide() {
       try {
-        statusEl.textContent = "Loading Python runtime (Pyodide)...";
+        setStatus("Loading Python runtime (Pyodide)...");
         pyodide = await loadPyodide();
+
+        setStatus("Loading Python packages (pandas, matplotlib)...");
         await pyodide.loadPackage(["pandas", "matplotlib"]);
-    
-        const resp = await fetch("control.py"); // make sure this file exists at this path
+
+        setStatus("Fetching control.py...");
+        // Cache-bust to avoid stale GitHub Pages caching during development
+        const resp = await fetch("control.py?v=" + Date.now());
         if (!resp.ok) throw new Error(`Failed to fetch control.py: ${resp.status} ${resp.statusText}`);
         const pyCode = await resp.text();
-    
+        console.log("Loaded control.py length:", pyCode.length);
+
+        setStatus("Loading Python code...");
         pyodide.runPython(pyCode);
-    
-        // sanity check: ensure the function exists
+
+        // Sanity check: ensure function exists
         const hasFn = pyodide.runPython(`'controlSensitizingGraph' in globals()`);
         if (!hasFn) throw new Error("controlSensitizingGraph was not defined after running control.py");
-    
-        statusEl.textContent = "Ready. Upload a CSV and enter a column name.";
+
+        setStatus("Ready. Upload a CSV and enter a column name.");
       } catch (err) {
-        statusEl.textContent = "Error during init.";
-        logEl.textContent = err?.stack || String(err);
+        setStatus("Error during init.");
+        setLog(err?.stack || String(err));
         console.error(err);
       }
     }
 
-    document.getElementById("file").addEventListener("change", async (e) => {
+    async function handleFileChange(e) {
       const f = e.target.files?.[0];
       if (!f) return;
       const arr = new Uint8Array(await f.arrayBuffer());
       fileBytes = arr;
-      statusEl.textContent = `Loaded: ${f.name} (${arr.byteLength.toLocaleString()} bytes)`;
-    });
+      setStatus(`Loaded: ${f.name} (${arr.byteLength.toLocaleString()} bytes)`);
+      console.log("FILE CHANGED");
+    }
 
-    document.getElementById("run").addEventListener("click", async () => {
+    async function handleRunClick() {
       summaryEl.textContent = "";
       plotEl.removeAttribute("src");
-      logEl.textContent = "";
+      setLog("");
 
-      if (!pyodide) return;
-      if (!fileBytes) { statusEl.textContent = "Please upload a CSV first."; return; }
+      try {
+        console.log("RUN CLICKED");
 
-      const col = document.getElementById("col").value.trim();
-      if (!col) { statusEl.textContent = "Please enter a column name."; return; }
+        if (!pyodide) throw new Error("Pyodide not initialized yet.");
+        if (!fileBytes) throw new Error("Please upload a CSV first.");
 
-      statusEl.textContent = "Running analysis...";
-      pyodide.globals.set("file_bytes", fileBytes);
-      pyodide.globals.set("output_col", col);
+        const col = colEl.value.trim();
+        if (!col) throw new Error("Please enter a column name.");
 
-      // Call Python function
-      const result = pyodide.runPython(`
-        controlSensitizingGraph(bytes(file_bytes), output_col)
-      `).toJs({ dict_converter: Object });
+        setStatus("Running analysis...");
 
-      if (!result.ok) {
-        statusEl.textContent = "Error.";
-        logEl.textContent = result.error || "Unknown error";
-        return;
+        pyodide.globals.set("file_bytes", fileBytes);
+        pyodide.globals.set("output_col", col);
+
+        const pyOut = pyodide.runPython(`
+controlSensitizingGraph(bytes(file_bytes), output_col)
+        `);
+
+        console.log("Raw Python return:", pyOut);
+
+        const result = pyOut?.toJs ? pyOut.toJs({ dict_converter: Object }) : pyOut;
+        console.log("JS-converted result:", result);
+
+        // If Python returned something unexpected, show it
+        if (!result || typeof result !== "object") {
+          setStatus("Error.");
+          setLog("Python returned non-object:\n" + String(result));
+          return;
+        }
+
+        // If Python returned ok:false (or missing ok), show full object
+        if (result.ok !== true) {
+          setStatus("Error.");
+          setLog("Python returned:\n" + JSON.stringify(result, null, 2));
+          return;
+        }
+
+        setStatus("Done.");
+        summaryEl.innerHTML = `
+          <b>n</b>: ${result.n} &nbsp; | &nbsp;
+          <b>mean</b>: ${Number(result.mean).toFixed(6)} &nbsp; | &nbsp;
+          <b>std</b>: ${Number(result.std).toFixed(6)} &nbsp; | &nbsp;
+          <b>flagged points</b>: ${(result.problem_points || []).length}
+        `;
+
+        if (result.plot_png_base64) {
+          plotEl.src = "data:image/png;base64," + result.plot_png_base64;
+        }
+
+        const lines = [];
+        for (const msg of (result.messages || [])) lines.push(msg);
+        lines.push("");
+        lines.push("Problem points: " + JSON.stringify(result.problem_points || []));
+        setLog(lines.join("\n"));
+
+      } catch (err) {
+        setStatus("Error.");
+        setLog(err?.stack || String(err));
+        console.error(err);
       }
+    }
 
-      statusEl.textContent = "Done.";
-      summaryEl.innerHTML = `
-        <b>n</b>: ${result.n} &nbsp; | &nbsp;
-        <b>mean</b>: ${result.mean.toFixed(6)} &nbsp; | &nbsp;
-        <b>std</b>: ${result.std.toFixed(6)} &nbsp; | &nbsp;
-        <b>flagged points</b>: ${result.problem_points.length}
-      `;
+    window.addEventListener("DOMContentLoaded", () => {
+      console.log("DOM READY");
 
-      plotEl.src = "data:image/png;base64," + result.plot_png_base64;
+      statusEl = document.getElementById("status");
+      summaryEl = document.getElementById("summary");
+      plotEl = document.getElementById("plot");
+      logEl = document.getElementById("log");
+      fileEl = document.getElementById("file");
+      colEl = document.getElementById("col");
+      runEl = document.getElementById("run");
 
-      const lines = [];
-      for (const msg of result.messages) lines.push(msg);
-      lines.push("");
-      lines.push("Problem points: " + JSON.stringify(result.problem_points));
-      logEl.textContent = lines.join("\n");
+      console.log("runBtn:", runEl);
+      console.log("fileInput:", fileEl);
+
+      fileEl.addEventListener("change", handleFileChange);
+      runEl.addEventListener("click", handleRunClick);
+
+      initPyodide();
     });
-
-    init();
   </script>
 </body>
 </html>
