@@ -2,12 +2,13 @@ import io
 import base64
 import pandas as pd
 import matplotlib
-matplotlib.use("Agg")  # important for headless plotting
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
 def controlSensitizingGraph(controlDataBytes, outputCol):
-    # Read CSV bytes
+    # Read CSV as bytes
     df = pd.read_csv(io.BytesIO(controlDataBytes))
 
     if outputCol not in df.columns:
