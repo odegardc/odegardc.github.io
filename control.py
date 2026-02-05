@@ -42,8 +42,8 @@ def controlSensitizingGraph(controlDataBytes, outputCol):
         # Rule 2: Two of three consecutive points outside +/-2 on same side
         if i >= 2:
             window = zScores[i - 2 : i + 1]
-            pos = sum(v >= 2 for v in window)
-            neg = sum(v <= -2 for v in window)
+            pos = sum((v >= 2) and (v < 3) for v in window)
+            neg = sum((v <= -2) and (v > -3) for v in window)
             if pos >= 2 or neg >= 2:
                 messages.append(f"[Rule 2] 2 of 3 outside +/-2 between {i-2} and {i}")
                 problemPoints.update(range(i - 2, i + 1))
