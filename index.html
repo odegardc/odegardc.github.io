@@ -36,6 +36,19 @@
     let pyodide = null;
     let fileBytes = null;
 
+    window.addEventListener("DOMContentLoaded", () => {
+      console.log("DOM READY");
+  
+      const runBtn = document.getElementById("run");
+      const fileInput = document.getElementById("file");
+  
+      console.log("runBtn:", runBtn);
+      console.log("fileInput:", fileInput);
+  
+      runBtn?.addEventListener("click", () => console.log("RUN CLICKED"));
+      fileInput?.addEventListener("change", () => console.log("FILE CHANGED"));
+    });
+    
     const statusEl = document.getElementById("status");
     const summaryEl = document.getElementById("summary");
     const plotEl = document.getElementById("plot");
