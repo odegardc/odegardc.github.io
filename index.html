@@ -1,10 +1,106 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
 <head>
-    <title>Pages Site Test</title>
+  <meta charset="utf-8" />
+  <title>Control Sensitizing Tool</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; max-width: 900px; }
+    .row { margin: 12px 0; }
+    input[type="text"] { padding: 6px 10px; width: 320px; }
+    button { padding: 8px 12px; cursor: pointer; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; }
+    img { max-width: 100%; border: 1px solid #ddd; border-radius: 8px; }
+  </style>
 </head>
 <body>
-    <h1>Hello world!</h1>
-    <p>p1!</p>
+  <h1>Control Sensitizing Graph</h1>
+
+  <div class="row">
+    <input id="file" type="file" accept=".csv,text/csv" />
+  </div>
+
+  <div class="row">
+    <label>Column name: </label>
+    <input id="col" type="text" placeholder="e.g., Absorbance" />
+    <button id="run">Run</button>
+  </div>
+
+  <div class="row" id="status"></div>
+  <div class="row" id="summary"></div>
+  <div class="row"><img id="plot" /></div>
+  <div class="row mono" id="log"></div>
+
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
+  <script>
+    let pyodide = null;
+    let fileBytes = null;
+
+    const statusEl = document.getElementById("status");
+    const summaryEl = document.getElementById("summary");
+    const plotEl = document.getElementById("plot");
+    const logEl = document.getElementById("log");
+
+    async function init() {
+      statusEl.textContent = "Loading Python runtime (Pyodide)...";
+      pyodide = await loadPyodide();
+      await pyodide.loadPackage(["pandas", "matplotlib"]);
+      const pyCode = await fetch("control.py").then(r => r.text());
+      pyodide.runPython(pyCode);
+      statusEl.textContent = "Ready. Upload a CSV and enter a column name.";
+    }
+
+    document.getElementById("file").addEventListener("change", async (e) => {
+      const f = e.target.files?.[0];
+      if (!f) return;
+      const arr = new Uint8Array(await f.arrayBuffer());
+      fileBytes = arr;
+      statusEl.textContent = `Loaded: ${f.name} (${arr.byteLength.toLocaleString()} bytes)`;
+    });
+
+    document.getElementById("run").addEventListener("click", async () => {
+      summaryEl.textContent = "";
+      plotEl.removeAttribute("src");
+      logEl.textContent = "";
+
+      if (!pyodide) return;
+      if (!fileBytes) { statusEl.textContent = "Please upload a CSV first."; return; }
+
+      const col = document.getElementById("col").value.trim();
+      if (!col) { statusEl.textContent = "Please enter a column name."; return; }
+
+      statusEl.textContent = "Running analysis...";
+      pyodide.globals.set("file_bytes", fileBytes);
+      pyodide.globals.set("output_col", col);
+
+      // Call Python function
+      const result = pyodide.runPython(`
+        controlSensitizingGraph(bytes(file_bytes), output_col)
+      `).toJs({ dict_converter: Object });
+
+      if (!result.ok) {
+        statusEl.textContent = "Error.";
+        logEl.textContent = result.error || "Unknown error";
+        return;
+      }
+
+      statusEl.textContent = "Done.";
+      summaryEl.innerHTML = `
+        <b>n</b>: ${result.n} &nbsp; | &nbsp;
+        <b>mean</b>: ${result.mean.toFixed(6)} &nbsp; | &nbsp;
+        <b>std</b>: ${result.std.toFixed(6)} &nbsp; | &nbsp;
+        <b>flagged points</b>: ${result.problem_points.length}
+      `;
+
+      plotEl.src = "data:image/png;base64," + result.plot_png_base64;
+
+      const lines = [];
+      for (const msg of result.messages) lines.push(msg);
+      lines.push("");
+      lines.push("Problem points: " + JSON.stringify(result.problem_points));
+      logEl.textContent = lines.join("\n");
+    });
+
+    init();
+  </script>
 </body>
 </html>
