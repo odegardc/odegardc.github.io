@@ -30,6 +30,12 @@
     <span class="muted" id="hint"></span>
   </div>
 
+  <div class="row">
+    <label for="returnCols">Extra columns to show:</label>
+    <input id="returnCols" type="text" placeholder="e.g., scan_id, well" />
+    <span class="muted">Comma-separated</span>
+  </div>
+
   <div class="row" id="status">Loading...</div>
   <div class="row" id="summary"></div>
   <div class="row"><img id="plot" alt="plot" /></div>
@@ -46,6 +52,7 @@
     const logEl = document.getElementById("log");
     const fileEl = document.getElementById("file");
     const colEl = document.getElementById("col");
+    const returnColsEl = document.getElementById("returnCols");
     const runEl = document.getElementById("run");
     const hintEl = document.getElementById("hint");
 
@@ -112,24 +119,31 @@
       try {
         if (!pyodide) throw new Error("Pyodide not ready yet.");
         if (!fileBytes) throw new Error("Upload a CSV first.");
+
         const col = colEl.value.trim();
         if (!col) throw new Error("Enter a column name.");
+
+        const returnColsRaw = (returnColsEl?.value || "").trim();
+        const returnCols = returnColsRaw
+          ? returnColsRaw.split(",").map(s => s.trim()).filter(Boolean)
+          : [];
 
         setStatus("Running analysis...");
         runEl.disabled = true;
 
         pyodide.globals.set("file_bytes", fileBytes);
         pyodide.globals.set("output_col", col);
+        pyodide.globals.set("return_cols", returnCols);
 
+        // NOTE: requires updated Python signature:
+        // controlSensitizingGraph(controlDataBytes, outputCol, returnCols=None)
         const pyOut = pyodide.runPython(`
-controlSensitizingGraph(bytes(file_bytes), output_col)
+controlSensitizingGraph(bytes(file_bytes), output_col, return_cols)
         `);
 
         let result;
         if (pyOut?.toJs) {
-          // Convert Python dict -> JS object
           const converted = pyOut.toJs({ dict_converter: Object.fromEntries, create_proxies: false });
-          // pyOut is a PyProxy; good hygiene to free it
           pyOut.destroy?.();
           result = converted;
         } else {
@@ -160,6 +174,20 @@ controlSensitizingGraph(bytes(file_bytes), output_col)
         for (const msg of (result.messages || [])) lines.push(msg);
         lines.push("");
         lines.push("Problem points: " + JSON.stringify(result.problem_points || []));
+
+        // NEW: print extra columns for flagged points (if provided)
+        const cols = result.return_cols || [];
+        const meta = result.point_meta || [];
+        if (cols.length) {
+          lines.push("");
+          lines.push("Flagged point details:");
+          for (const i of (result.problem_points || [])) {
+            const m = meta[i] || {};
+            const details = cols.map(c => `${c}=${m[c]}`).join(", ");
+            lines.push(`  Point ${i} (row ${m.row_index}): ${details}`);
+          }
+        }
+
         setLog(lines.join("\n"));
 
       } catch (err) {
