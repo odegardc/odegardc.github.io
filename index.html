@@ -133,12 +133,12 @@
 
         pyodide.globals.set("file_bytes", fileBytes);
         pyodide.globals.set("output_col", col);
-        pyodide.globals.set("return_cols", returnCols);
+        pyodide.globals.set("return_cols_text", returnColsEl.value || "");
 
         // NOTE: requires updated Python signature:
         // controlSensitizingGraph(controlDataBytes, outputCol, returnCols=None)
         const pyOut = pyodide.runPython(`
-controlSensitizingGraph(bytes(file_bytes), output_col, return_cols)
+controlSensitizingGraph(bytes(file_bytes), output_col, return_cols_text)
         `);
 
         let result;
