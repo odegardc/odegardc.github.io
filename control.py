@@ -34,6 +34,8 @@ def controlSensitizingGraph(controlDataBytes, outputCol, returnColsText=""):
                 "error": f"Column '{c}' contains missing values. Please clean data before running."
             }
 
+    data = df[outputCol].reset_index(drop = True)
+    
     if len(data) < 2:
         return {"ok": False, "error": "Need at least 2 non-missing values to compute std dev."}
 
@@ -166,5 +168,5 @@ def controlSensitizingGraph(controlDataBytes, outputCol, returnColsText=""):
         "messages": messages,
         "plot_png_base64": img_b64,
         "return_cols": returnCols,
-        "point_meta": extra_by_point,   
+        "point_meta": point_meta,   
     }
