@@ -17,7 +17,6 @@ def controlSensitizingGraph(controlDataBytes, outputCol, returnColsText=""):
             "error": f"Column '{outputCol}' not found. Available columns: {list(df.columns)}"
         }
 
-    -
     returnCols = [c.strip() for c in returnColsText.split(",") if c.strip()]
     
     missing = [c for c in returnCols if c not in df.columns]
