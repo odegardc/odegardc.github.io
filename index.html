@@ -184,7 +184,7 @@ controlSensitizingGraph(bytes(file_bytes), output_col, return_cols_text)
           for (const i of (result.problem_points || [])) {
             const m = meta[i] || {};
             const details = cols.map(c => `${c}=${m[c]}`).join(", ");
-            lines.push(`  Point ${i} (row ${m.row_index}): ${details}`);
+            lines.push(`  Point ${i}: ${details}`);
           }
         }
 
