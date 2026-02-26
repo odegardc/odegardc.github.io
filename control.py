@@ -7,7 +7,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
-def controlSensitizingGraph(controlDataBytes, outputCol):
+def controlSensitizingGraph(controlDataBytes, outputCol, returnColsText=""):
     # Read CSV as bytes
     df = pd.read_csv(io.BytesIO(controlDataBytes))
 
@@ -17,7 +17,23 @@ def controlSensitizingGraph(controlDataBytes, outputCol):
             "error": f"Column '{outputCol}' not found. Available columns: {list(df.columns)}"
         }
 
-    data = df[outputCol].dropna().reset_index(drop=True)
+    -
+    returnCols = [c.strip() for c in returnColsText.split(",") if c.strip()]
+    
+    missing = [c for c in returnCols if c not in df.columns]
+    if missing:
+        return {
+            "ok": False,
+            "error": f"Return column(s) not found: {missing}"
+        }
+    
+    cols_to_check = [outputCol] + returnCols
+    for c in cols_to_check:
+        if df[c].isna().any():
+            return {
+                "ok": False,
+                "error": f"Column '{c}' contains missing values. Please clean data before running."
+            }
 
     if len(data) < 2:
         return {"ok": False, "error": "Need at least 2 non-missing values to compute std dev."}
@@ -132,6 +148,16 @@ def controlSensitizingGraph(controlDataBytes, outputCol):
 
     img_b64 = base64.b64encode(buf.getvalue()).decode("ascii")
 
+    point_meta = []
+    for i in range(len(data)):
+        row = {}
+        for c in returnCols:
+            v = df.iloc[i][c]
+            if pd.isna(v):
+                v = None
+            row[c] = v
+        point_meta.append(row)
+        
     return {
         "ok": True,
         "n": int(len(zScores)),
@@ -140,4 +166,6 @@ def controlSensitizingGraph(controlDataBytes, outputCol):
         "problem_points": prob,
         "messages": messages,
         "plot_png_base64": img_b64,
+        "return_cols": returnCols,
+        "point_meta": extra_by_point,   
     }
