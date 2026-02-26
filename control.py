@@ -18,14 +18,14 @@ def controlSensitizingGraph(controlDataBytes, outputCol, returnColsText=""):
         }
 
     returnCols = [c.strip() for c in returnColsText.split(",") if c.strip()]
-    
+
     missing = [c for c in returnCols if c not in df.columns]
     if missing:
         return {
             "ok": False,
             "error": f"Return column(s) not found: {missing}"
         }
-    
+
     cols_to_check = [outputCol] + returnCols
     for c in cols_to_check:
         if df[c].isna().any():
@@ -34,8 +34,8 @@ def controlSensitizingGraph(controlDataBytes, outputCol, returnColsText=""):
                 "error": f"Column '{c}' contains missing values. Please clean data before running."
             }
 
-    data = df[outputCol].reset_index(drop = True)
-    
+    data = df[outputCol]
+
     if len(data) < 2:
         return {"ok": False, "error": "Need at least 2 non-missing values to compute std dev."}
 
@@ -48,6 +48,24 @@ def controlSensitizingGraph(controlDataBytes, outputCol, returnColsText=""):
     problemPoints = set()
     messages = []
 
+    # coalesceing method for consecutive rules
+    _rule_state = {}
+    def add_or_extend(rule_num: int, start: int, end: int, fmt: str):
+        key = int(rule_num)
+        st = _rule_state.get(key)
+
+        if st is not None:
+            # windows advance by 1 at the end
+            if end == st["end"] + 1:
+                st["end"] = end
+                messages[st["msg_idx"]] = fmt.format(start=st["start"], end=st["end"])
+                return
+
+        # otherwise new run
+        msg_idx = len(messages)
+        messages.append(fmt.format(start=start, end=end))
+        _rule_state[key] = {"msg_idx": msg_idx, "start": start, "end": end}
+
     for i, x in enumerate(data):
         z = (x - mean) / std
         zScores.append(float(z))
@@ -59,62 +77,67 @@ def controlSensitizingGraph(controlDataBytes, outputCol, returnColsText=""):
 
         # Rule 2: Two of three consecutive points outside +/-2 on same side
         if i >= 2:
-            window = zScores[i - 2 : i + 1]
+            window = zScores[i - 2: i + 1]
             pos = sum((v >= 2) and (v < 3) for v in window)
             neg = sum((v <= -2) and (v > -3) for v in window)
             if pos >= 2 or neg >= 2:
-                messages.append(f"[Rule 2] 2 of 3 outside +/-2 between {i-2} and {i}")
+                add_or_extend(2, i - 2, i, "[Rule 2] 2 of 3 outside +/-2 between {start} and {end}")
                 problemPoints.update(range(i - 2, i + 1))
 
         # Rule 3: Four of five beyond +/-1 on same side
         if i >= 4:
-            window = zScores[i - 4 : i + 1]
+            window = zScores[i - 4: i + 1]
             pos = sum(v >= 1 for v in window)
             neg = sum(v <= -1 for v in window)
             if pos >= 4 or neg >= 4:
-                messages.append(f"[Rule 3] 4 of 5 beyond +/-1 between {i-4} and {i}")
+                add_or_extend(3, i - 4, i, "[Rule 3] 4 of 5 beyond +/-1 between {start} and {end}")
                 problemPoints.update(range(i - 4, i + 1))
 
         # Rule 4: Eight consecutive on same side of center line
         if i >= 7:
-            window = zScores[i - 7 : i + 1]
+            window = zScores[i - 7: i + 1]
             all_pos = all(v > 0 for v in window)
             all_neg = all(v < 0 for v in window)
             if all_pos or all_neg:
-                messages.append(f"[Rule 4] 8 points on one side between {i-7} and {i}")
+                add_or_extend(4, i - 7, i, "[Rule 4] 8 points on one side between {start} and {end}")
                 problemPoints.update(range(i - 7, i + 1))
 
         # Rule 5: Six steadily increasing or decreasing (uses raw data)
         if i >= 5:
-            w = list(data.iloc[i - 5 : i + 1])
+            w = list(data.iloc[i - 5: i + 1])
             inc = all(w[j] < w[j + 1] for j in range(5))
             dec = all(w[j] > w[j + 1] for j in range(5))
             if inc or dec:
-                messages.append(f"[Rule 5] 6 points steadily {'increasing' if inc else 'decreasing'} between {i-5} and {i}")
+                trend = "increasing" if inc else "decreasing"
+                add_or_extend(5, i - 5, i, f"[Rule 5] 6 points steadily {trend} between {{start}} and {{end}}")
                 problemPoints.update(range(i - 5, i + 1))
 
         # Rule 6: Fifteen within +/-1
         if i >= 14:
-            window = zScores[i - 14 : i + 1]
+            window = zScores[i - 14: i + 1]
             if all(abs(v) < 1 for v in window):
-                messages.append(f"[Rule 6] 15 points within +/-1 between {i-14} and {i}")
+                add_or_extend(6, i - 14, i, "[Rule 6] 15 points within +/-1 between {start} and {end}")
                 problemPoints.update(range(i - 14, i + 1))
 
         # Rule 7: Fourteen alternating up/down (raw data)
         if i >= 13:
-            w = list(data.iloc[i - 13 : i + 1])
+            w = list(data.iloc[i - 13: i + 1])
             diffs = [w[j + 1] - w[j] for j in range(13)]
             if all(d != 0 for d in diffs):
                 alternating = all(diffs[j] * diffs[j + 1] < 0 for j in range(12))
                 if alternating:
-                    messages.append(f"[Rule 7] 14 points alternating up/down between {i - 13} and {i}")
+                    add_or_extend(7, i - 13, i, "[Rule 7] 14 points alternating up/down between {start} and {end}")
                     problemPoints.update(range(i - 13, i + 1))
 
         # Rule 8: Eight outside +/-1 on both sides
         if i >= 7:
-            window = zScores[i - 7 : i + 1]
-            if all(abs(v) >= 1 for v in window) and any(v > 0 for v in window) and any(v < 0 for v in window):
-                messages.append(f"[Rule 8] 8 points outside +/-1 on both sides between {i-7} and {i}")
+            window = zScores[i - 7: i + 1]
+            if (
+                all(abs(v) >= 1 for v in window)
+                and any(v > 0 for v in window)
+                and any(v < 0 for v in window)
+            ):
+                add_or_extend(8, i - 7, i, "[Rule 8] 8 points outside +/-1 on both sides between {start} and {end}")
                 problemPoints.update(range(i - 7, i + 1))
 
     # Plot
@@ -158,7 +181,7 @@ def controlSensitizingGraph(controlDataBytes, outputCol, returnColsText=""):
                 v = None
             row[c] = v
         point_meta.append(row)
-        
+
     return {
         "ok": True,
         "n": int(len(zScores)),
@@ -168,5 +191,5 @@ def controlSensitizingGraph(controlDataBytes, outputCol, returnColsText=""):
         "messages": messages,
         "plot_png_base64": img_b64,
         "return_cols": returnCols,
-        "point_meta": point_meta,   
+        "point_meta": point_meta,
     }
