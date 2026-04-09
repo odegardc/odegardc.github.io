@@ -13,6 +13,18 @@
     img { max-width: 100%; border: 1px solid #ddd; border-radius: 8px; }
     #status { font-weight: 600; }
     .muted { opacity: 0.8; }
+    .result-block {
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      padding: 16px;
+      margin: 16px 0;
+      background: #fafafa;
+    }
+    .result-block h2 {
+      margin: 0 0 10px 0;
+      font-size: 1.1rem;
+      color: #333;
+    }
   </style>
 </head>
 
@@ -24,54 +36,112 @@
   </div>
 
   <div class="row">
-    <label for="col">Column name:</label>
-    <input id="col" type="text" placeholder="e.g., Absorbance" />
+    <label for="col">Title(s) of columns with control data:</label>
+    <input id="col" type="text" placeholder="e.g., Absorbance, Signal, OD450" />
     <button id="run" type="button" disabled>Run</button>
     <span class="muted" id="hint"></span>
   </div>
+  <div class="row">
+    <span class="muted">Comma-separated for multiple plots</span>
+  </div>
 
   <div class="row">
-    <label for="returnCols">Extra columns to show:</label>
+    <label for="returnCols">Title of columns with labels:</label>
     <input id="returnCols" type="text" placeholder="e.g., scan_id, well" />
     <span class="muted">Comma-separated</span>
   </div>
 
   <div class="row" id="status">Loading...</div>
-  <div class="row" id="summary"></div>
-  <div class="row"><img id="plot" alt="plot" /></div>
-  <div class="row mono" id="log"></div>
+
+  <div id="results"></div>
 
   <!-- Pyodide -->
   <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
 
   <script>
     // DOM
-    const statusEl = document.getElementById("status");
-    const summaryEl = document.getElementById("summary");
-    const plotEl = document.getElementById("plot");
-    const logEl = document.getElementById("log");
-    const fileEl = document.getElementById("file");
-    const colEl = document.getElementById("col");
+    const statusEl     = document.getElementById("status");
+    const resultsEl    = document.getElementById("results");
+    const fileEl       = document.getElementById("file");
+    const colEl        = document.getElementById("col");
     const returnColsEl = document.getElementById("returnCols");
-    const runEl = document.getElementById("run");
-    const hintEl = document.getElementById("hint");
+    const runEl        = document.getElementById("run");
+    const hintEl       = document.getElementById("hint");
 
     // State
-    let pyodide = null;
+    let pyodide   = null;
     let fileBytes = null;
 
     const setStatus = (msg) => statusEl.textContent = msg;
-    const setLog = (msg) => logEl.textContent = msg || "";
-    const clearOutput = () => {
-      summaryEl.textContent = "";
-      plotEl.removeAttribute("src");
-      setLog("");
-    };
+    const clearOutput = () => resultsEl.innerHTML = "";
 
     function updateRunEnabled() {
       const ok = !!pyodide && !!fileBytes && !!colEl.value.trim();
       runEl.disabled = !ok;
-      hintEl.textContent = ok ? "" : "Upload CSV + enter column name";
+      hintEl.textContent = ok ? "" : "Upload CSV + enter column name(s)";
+    }
+
+    // Build one result card for a single column's analysis result
+    function renderResult(colName, result) {
+      const block = document.createElement("div");
+      block.className = "result-block";
+
+      const heading = document.createElement("h2");
+      heading.textContent = `Column: ${colName}`;
+      block.appendChild(heading);
+
+      if (result.ok !== true) {
+        const errEl = document.createElement("pre");
+        errEl.className = "mono";
+        errEl.style.color = "red";
+        errEl.textContent = result.error || "Unknown error";
+        block.appendChild(errEl);
+        return block;
+      }
+
+      // Summary line
+      const summary = document.createElement("div");
+      summary.className = "row";
+      summary.innerHTML = `
+        <b>n</b>: ${result.n} &nbsp; | &nbsp;
+        <b>mean</b>: ${Number(result.mean).toFixed(6)} &nbsp; | &nbsp;
+        <b>std</b>: ${Number(result.std).toFixed(6)} &nbsp; | &nbsp;
+        <b>flagged points</b>: ${(result.problem_points || []).length}
+      `;
+      block.appendChild(summary);
+
+      // Plot
+      if (result.plot_png_base64) {
+        const img = document.createElement("img");
+        img.src = "data:image/png;base64," + result.plot_png_base64;
+        img.alt = `Plot for ${colName}`;
+        block.appendChild(img);
+      }
+
+      // Log
+      const lines = [];
+      for (const msg of (result.messages || [])) lines.push(msg);
+      lines.push("");
+      lines.push("Problem points: " + JSON.stringify(result.problem_points || []));
+
+      const cols = result.return_cols || [];
+      const meta = result.point_meta || [];
+      if (cols.length) {
+        lines.push("");
+        lines.push("Flagged point details:");
+        for (const i of (result.problem_points || [])) {
+          const m = meta[i] || {};
+          const details = cols.map(c => `${c}=${m[c]}`).join(", ");
+          lines.push(`  Point ${i}: ${details}`);
+        }
+      }
+
+      const log = document.createElement("pre");
+      log.className = "mono";
+      log.textContent = lines.join("\n");
+      block.appendChild(log);
+
+      return block;
     }
 
     async function init() {
@@ -92,11 +162,14 @@
         const hasFn = pyodide.runPython(`"controlSensitizingGraph" in globals()`);
         if (!hasFn) throw new Error("controlSensitizingGraph not found after loading control.py");
 
-        setStatus("Ready. Upload a CSV and enter a column name.");
+        setStatus("Ready. Upload a CSV and enter column name(s).");
         updateRunEnabled();
       } catch (err) {
         setStatus("Error during init.");
-        setLog(err?.stack || String(err));
+        const log = document.createElement("pre");
+        log.className = "mono";
+        log.textContent = err?.stack || String(err);
+        resultsEl.appendChild(log);
         console.error(err);
       }
     }
@@ -120,79 +193,50 @@
         if (!pyodide) throw new Error("Pyodide not ready yet.");
         if (!fileBytes) throw new Error("Upload a CSV first.");
 
-        const col = colEl.value.trim();
-        if (!col) throw new Error("Enter a column name.");
+        const rawCols = colEl.value.trim();
+        if (!rawCols) throw new Error("Enter at least one column name.");
 
-        const returnColsRaw = (returnColsEl?.value || "").trim();
-        const returnCols = returnColsRaw
-          ? returnColsRaw.split(",").map(s => s.trim()).filter(Boolean)
-          : [];
+        // Split on commas, trim whitespace, drop empty strings
+        const columnNames = rawCols.split(",").map(s => s.trim()).filter(Boolean);
 
-        setStatus("Running analysis...");
+        setStatus(`Running analysis for ${columnNames.length} column(s)...`);
         runEl.disabled = true;
 
         pyodide.globals.set("file_bytes", fileBytes);
-        pyodide.globals.set("output_col", col);
         pyodide.globals.set("return_cols_text", returnColsEl.value || "");
 
-        // NOTE: requires updated Python signature:
-        // controlSensitizingGraph(controlDataBytes, outputCol, returnCols=None)
-        const pyOut = pyodide.runPython(`
+        for (const colName of columnNames) {
+          pyodide.globals.set("output_col", colName);
+
+          const pyOut = pyodide.runPython(`
 controlSensitizingGraph(bytes(file_bytes), output_col, return_cols_text)
-        `);
+          `);
 
-        let result;
-        if (pyOut?.toJs) {
-          const converted = pyOut.toJs({ dict_converter: Object.fromEntries, create_proxies: false });
-          pyOut.destroy?.();
-          result = converted;
-        } else {
-          result = pyOut;
-        }
+          let result;
+          if (pyOut?.toJs) {
+            const converted = pyOut.toJs({ dict_converter: Object.fromEntries, create_proxies: false });
+            pyOut.destroy?.();
+            result = converted;
+          } else {
+            result = pyOut;
+          }
 
-        if (!result || typeof result !== "object") {
-          throw new Error("Python returned unexpected output:\n" + String(result));
-        }
-        if (result.ok !== true) {
-          throw new Error(result.error || ("Python returned:\n" + JSON.stringify(result, null, 2)));
+          if (!result || typeof result !== "object") {
+            result = { ok: false, error: "Python returned unexpected output:\n" + String(result) };
+          }
+
+          resultsEl.appendChild(renderResult(colName, result));
         }
 
         setStatus("Done.");
 
-        summaryEl.innerHTML = `
-          <b>n</b>: ${result.n} &nbsp; | &nbsp;
-          <b>mean</b>: ${Number(result.mean).toFixed(6)} &nbsp; | &nbsp;
-          <b>std</b>: ${Number(result.std).toFixed(6)} &nbsp; | &nbsp;
-          <b>flagged points</b>: ${(result.problem_points || []).length}
-        `;
-
-        if (result.plot_png_base64) {
-          plotEl.src = "data:image/png;base64," + result.plot_png_base64;
-        }
-
-        const lines = [];
-        for (const msg of (result.messages || [])) lines.push(msg);
-        lines.push("");
-        lines.push("Problem points: " + JSON.stringify(result.problem_points || []));
-
-        // NEW: print extra columns for flagged points (if provided)
-        const cols = result.return_cols || [];
-        const meta = result.point_meta || [];
-        if (cols.length) {
-          lines.push("");
-          lines.push("Flagged point details:");
-          for (const i of (result.problem_points || [])) {
-            const m = meta[i] || {};
-            const details = cols.map(c => `${c}=${m[c]}`).join(", ");
-            lines.push(`  Point ${i}: ${details}`);
-          }
-        }
-
-        setLog(lines.join("\n"));
-
       } catch (err) {
         setStatus("Error.");
-        setLog(err?.stack || String(err));
+        const log = document.createElement("pre");
+        log.className = "mono";
+        log.style.color = "red";
+        log.textContent = err?.stack || String(err);
+        resultsEl.appendChild(log);
         console.error(err);
       } finally {
         updateRunEnabled();
